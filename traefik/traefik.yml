@@ -1,0 +1,54 @@
+# traefik.yaml
+# Enable Traefik dashboard
+api:
+  insecure: true     # Enable insecure mode for the dashboard (remove in production)
+  dashboard: true    # Enable Traefik dashboard
+
+# Define entry points (ports) for incoming traffic
+entryPoints:
+  web:
+    address: ":80"    # HTTP port
+# Define entry points (ports) for incoming traffic
+entryPoints:
+  web-secure:
+    address: ":80"    # HTTP port
+
+# Configure providers for dynamic configuration (e.g., Docker, Kubernetes)
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"   # Docker provider configuration
+    exposedByDefault: false
+    networks:
+      - name: traefik
+  
+
+# providers:
+#   # Enable the file provider to define routers / middlewares / services in file
+#   file:
+#     filename: /etc/traefik/dynamic.yml
+#     watch: true
+
+# Enable logging
+log:
+  level: INFO               # Set log level (DEBUG, INFO, WARN, ERROR, FATAL)
+  filePath: "/var/log/traefik.log"  # Path to log file
+
+# Enable access logs
+accessLog:
+  filePath: "/var/log/access.log"     # Path to access log file
+  # format: "json"    
+
+  
+certificatesResolvers:
+  myresolver:
+    acme:
+      email: "jb.enquiries@proton.me"   # Email address used for registration with Let's Encrypt
+      storage: "/etc/traefik/acme/acme.json"   # Path to store ACME certificates
+      httpChallenge:
+        entryPoint: "web"   # Entry point for HTTP challenge
+
+middlewares:
+  redirect-to-https:
+    redirectScheme:
+      scheme: "https"
+      permanent: true
