@@ -1,0 +1,18 @@
+FROM alpine:latest
+
+# Install iptables
+RUN apk add --no-cache iptables
+
+# Copy scripts
+COPY start_firewall.sh /usr/local/bin/start_firewall.sh
+COPY signal_handler.sh /usr/local/bin/signal_handler.sh
+COPY enable_firewall.sh /usr/local/bin/enable_firewall.sh
+COPY disable_firewall.sh /usr/local/bin/disable_firewall.sh
+
+USER root
+
+RUN chmod -R +x /usr/local/bin/
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/signal_handler.sh"]
+
+# USage: docker kill -s SIGUSR1 <container_id>

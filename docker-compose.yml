@@ -1,8 +1,14 @@
-
+version: '3.5'
 services:
+    
+  full-stack:
+    image: tianon/true
+    depends_on: [twingate, crowdsec, traefik]
 
   twingate:
+    container_name: twingate
     image: twingate/connector:1
+    restart: unless-stopped
     environment:
       - TENANT_URL=${TENANT_URL}
       - ACCESS_TOKEN=${ACCESS_TOKEN}
@@ -11,12 +17,13 @@ services:
     logging:
       driver: fluentd
       options:
-        fluentd-async-connect: 'true'
-    restart: always
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     networks:
       - external
 
   ngrok:
+    container_name: ngrok
     image: ngrok/ngrok:latest
     restart: unless-stopped
     command:
@@ -34,13 +41,11 @@ services:
       - HOSTNAME=fine-eternal-falcon.ngrok-free.app
     volumes:
       - ./ngrok.yml:/etc/ngrok.yml
-    depends_on:
-      - traefik
-      - nginx
     logging:
       driver: fluentd
       options:
-        fluentd-async-connect: 'true'
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.ngrok.rule=Host(`ngrok.localhost`, `ngrok.traefik.internal`, `ngrok.int`) || PathPrefix(`/ngrok`)"
@@ -54,10 +59,23 @@ services:
       - "function.port.4040=Tunnel Monitoring"
     networks:
       - external
+
   
+  firewall:
+    container_name: firewall
+    restart: unless-stopped
+    build: ./services/firewall
+    privileged: true
+    logging:
+        driver: fluentd
+        options:
+            fluentd-async-connect: 'true'
+            fluentd-address: '192.168.3.201:24224'
+
   crowdsec:
+    container_name: crowdsec
     image: crowdsecurity/crowdsec:v1.0.8
-    restart: always
+    restart: unless-stopped
     environment:
       COLLECTIONS: "crowdsecurity/traefik"
       GID: "${GID-1000}"
@@ -71,18 +89,18 @@ services:
     logging:
       driver: fluentd
       options:
-        fluentd-async-connect: 'true'
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     networks:
       - crowdsec
       - external
-      - traefik
-        # ipv4_address: 172.20.0.4
 
   #metabase, because security is cool, but dashboards are cooler
   cs-dashboard:
+    container_name: cs-dashboard
     #we're using a custom Dockerfile so that metabase pops with pre-configured dashboards
     build: ./crowdsec/dashboard
-    restart: always
+    restart: unless-stopped
     ports:
       - 3001:3000
     environment:
@@ -95,7 +113,8 @@ services:
     logging:
       driver: fluentd
       options:
-        fluentd-async-connect: 'true'
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.cs-dashboard.rule=Host(`cs-dashboard.localhost`, `cs-dashboard.traefik.internal`) || PathPrefix(`/cs-dashboard`)"
@@ -108,59 +127,67 @@ services:
       - "function.port.80=Reverse Proxy "
     networks:
       - crowdsec
+      - logging
         # ipv4_address: 172.20.0.5
 
   traefik:
+    container_name: traefik
+    hostname: traefik   
     image: traefik:latest
-    hostname: traefik
+    restart: unless-stopped
+    deploy:
+      mode: global  # Deploy as a global service
     command:
-      - "--api.insecure=false" # true"
+      - "--api.insecure=true" # true"
       - "--accesslog=true"
       - "--tracing=true"
       - "--tracing.serviceName=elasticsearch"
       - "--accesslog.filepath=/var/log/access.log"
       - "--serverstransport.insecureskipverify=true"
+
       - "--providers.docker=true"
+      # - "--swarmmode=true"
       - "--providers.docker.network=traefik"
       - "--providers.docker.exposedbydefault=false"
+
+      # - "--entrypoints.twingate.address=10.0.7.4:80"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.websecure.http.tls.certResolver=myresolver"
+
       - "--certificatesresolvers.myresolver.acme.email=jb.enquiries@proton.me"
       - "--certificatesresolvers.myresolver.acme.storage=/etc/traefik/acme/acme.json"
       - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+
       - "--log.level=DEBUG"
       - "--log.filePath=/var/log/traefik.log" 
       - "--providers.file.directory=/dyn"
+      
       - "--experimental.plugins.fail2ban.modulename=github.com/tomMoulard/fail2ban"
       - "--experimental.plugins.fail2ban.version=v0.7.1"
       - "--serversTransport.forwardingTimeouts.dialTimeout=180s"
-      # - "--accesslog=true"
-      # - "--accesslog.bufferingsize=100"
-      # - "--accesslog.fields.defaultmode=keep"
-      # - "--accesslog.fields.headers.defaultmode=keep"
-      # - "--accesslog.fields.headers.names=Host,X-Real-IP,X-Forwarded-For,X-Forwarded-Proto"
       # - "--configfile=/etc/traefik/traefik.yml"
     ports:
       - "80:80"
       - "443:443"
-      # - "9191:8080"  # Traefik dashboard
+      - "9191:8080"  # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # - ./services/traefik/traefik.yml:/etc/traefik/traefik.yml
       # - /services/traefik/dynamic.yml:/etc/traefik/dynamic.yml
       - ./traefik/dyn:/dyn
-      - ./traefik/logs/:/var/log/
+      - traefik-logs:/var/log/
       - ./traefik/htpasswd:/htpasswd.txt
     logging:
       driver: fluentd
       options:
-        fluentd-async-connect: 'true'
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`, `traefik.traefik.internal`) || PathPrefix(`/traefik`)"
       - "traefik.http.services.traefik.loadbalancer.server.port=8080"
-      - "traefik.http.services.traefik.loadbalancer.server.scheme=https"
+      - "traefik.http.services.traefik.loadbalancer.server.scheme=http"
       - "certificatesResolvers.myresolver.acme.email=jb.enquiries@proton.me"
       - "certificatesResolvers.myresolver.acme.storage=/etc/traefik/acme/acme.json"
       - "certificatesResolvers.myresolver.acme.httpChallenge.entryPoint=web"
@@ -171,10 +198,18 @@ services:
       - "function.port.8080=Reverse Proxy"
     networks:
       - traefik
-  
+      - external
+
+
 # Reverse Proxy
   nginx:
+    container_name: nginx
     image: nginx:latest
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf
       - ./htpasswd:/etc/nginx/.htpasswd
@@ -199,41 +234,87 @@ services:
 
   # Man in the Middle Proxy
   mitm:
+    container_name: mitm
     # Allows network traffic introspection
     image: mitmproxy/mitmproxy
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
+    networks:
+      - traefik
 
   # DNS Blackhole
   dns-sinkhole:
+    container_name: dns-sinkhole
     # Blocks malicious content and adverts from resolving nameservers
     image: patterns/sinkhole
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
+    networks:
+      - traefik
 
   adguardhome:
+    container_name: adguardhome
     image: adguard/adguardhome
     container_name: adguardhome
     restart: unless-stopped
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     volumes:
       - /my/own/workdir:/opt/adguardhome/work
       - /my/own/confdir:/opt/adguardhome/conf
     ports:
       - "53:53/tcp"
       - "53:53/udp"
-      - "67:67/udp"
-      - "68:68/udp"
-      - "80:80/tcp"
-      - "443:443/tcp"
-      - "443:443/udp"
-      - "3000:3000/tcp"
-      - "853:853/tcp"
-      - "853:853/udp"
-      - "5443:5443/tcp"
-      - "5443:5443/udp"
-      - "6060:6060/tcp"
+      # - "67:67/udp"
+      # - "68:68/udp"
+      - "8880:80/tcp"
+      # - "443:443/tcp"
+      # - "443:443/udp"
+      - "3003:3000/tcp"
+      # - "853:853/tcp"
+      # - "853:853/udp"
+      # - "5443:5443/tcp"
+      # - "5443:5443/udp"
+      # - "6060:6060/tcp"
     networks:
       - traefik
 
+
+  homeassistant:
+    container_name: homeassistant
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
+    ports:
+      - 8123:8123
+    volumes:
+      - ./homassistant/config:/config
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    privileged: true
+    # network_mode: host   
+
   whoami:
+    container_name: whoami
     image: "traefik/whoami"
     container_name: "simple-service"
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
@@ -249,33 +330,27 @@ services:
 volumes:
   crowdsec-db:
   crowdsec-config:
+  traefik-logs:
   logs:
 
 networks:
 
     traefik:
-      # name: traefik
-      # driver: overlay
-      # driver_opts:
-      #   encrypted: true
-      #   scope: engine
+      name: traefik
+      driver: overlay
+      # internal: true
+      driver_opts:
+        encrypted: "true"
+        scope: local
+        # com.docker.network.driver.mtu: 1000
     
     crowdsec:
-      # driver: overlay
-      # driver_opts:
-      #   encrypted: true
-      #   scope: engine
-      
-    # internal: # Internal network
-    #     driver: bridge
-    #     enable_ipv6: false
-    #     # internal: true
-    #     ipam:
-    #         driver: default
-    #         config:
-    #             - subnet: 172.16.0.0/16
-    #               gateway: 172.16.0.1
-    
+      driver: overlay
+      internal: true
+      driver_opts:
+        encrypted: "true"
+        scope: local
+          
     external: # Public facing network
         driver: bridge
         enable_ipv6: false
@@ -286,3 +361,21 @@ networks:
         #     config:
         #         - subnet: 173.16.0.0/16
         #           gateway: 173.16.0.1
+
+secrets:
+  twingate_secret:
+    file: ./secrets/twingate.txt
+  ngrok_secret:
+    file: ./secrets/ngrok.txt
+  crowdsec_secret:
+    file: ./secrets/crowdsec.txt
+  traefik_secret:
+    file: ./secrets/traefik.txt
+  traefik_htpasswd:
+    file: ./secrets/traefik_htpasswd.txt
+  nginx_secret:
+    file: ./secrets/nginx.txt
+  adguard_secret:
+    file: ./secrets/adguard.txt
+  homeassistant_secret:
+    file: ./secrets/homeassistant.txt 
