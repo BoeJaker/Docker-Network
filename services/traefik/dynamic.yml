@@ -1,0 +1,27 @@
+middlewares:
+  stripPrefix:
+    prefixes:
+      - /traefik
+      - /dashboard
+      - /dev-environment
+    forceSlash: false
+
+tls:
+  stores:
+    default:
+      defaultGeneratedCert:
+        resolver: myresolver
+        domain:
+          main: traefik.internal
+          sans:
+            - traefik.traefik.internal
+            - dashboard.traefik.internal
+            - dev-environment.traefik.internal
+  options:
+    default:
+      minVersion: VersionTLS12
+      cipherSuites:
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+      sniStrict: true

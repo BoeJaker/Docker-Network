@@ -1,8 +1,20 @@
-#!/bin/sh
+# Flush existing rules
+iptables -F
 
-# Enable firewall rules to allow SSH traffic to and from traefik host
-iptables -A INPUT -p tcp -s 10.0.0.0/8 --dport 22 -j ACCEPT
-iptables -A OUTPUT -p tcp -d 10.0.0.0/8 --dport 22 -j ACCEPT
+# Allow traffic from twingate_a and twingate_b to traefik on ports 80 and 443
+iptables -A INPUT -s twingate_a -p tcp --dport 80 -j ACCEPT
+iptables -A INPUT -s twingate_a -p tcp --dport 443 -j ACCEPT
+iptables -A INPUT -s twingate_b -p tcp --dport 80 -j ACCEPT
+iptables -A INPUT -s twingate_b -p tcp --dport 443 -j ACCEPT
 
-# Log the enable event
-echo "Firewall enabled. Allowing SSH traffic to and from traefik host." >> /var/log/firewall.log
+# Allow traffic to traefik on ports 80 and 443
+iptables -A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
+
+# Allow established connections and traffic related to these connections
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Drop all other incoming traffic
+iptables -P INPUT DROP
+
+# Keep the container running to maintain the firewall rules
+tail -f /dev/null

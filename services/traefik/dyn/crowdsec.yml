@@ -23,10 +23,10 @@ http:
             - crowdsecurity/http-path-traversal-probing
             - crowdsecurity/http-xss-probing
             - crowdsecurity/http-generic-bf
-          forwardedHeadersTrustedIPs: 
+          forwardedHeadersTrustedIPs:
             - 10.0.10.23/32
             - 10.0.20.0/24
-          clientTrustedIPs: 
+          clientTrustedIPs:
             - 192.168.1.0/24
           forwardedHeadersCustomName: X-Custom-Header
           redisCacheEnabled: false

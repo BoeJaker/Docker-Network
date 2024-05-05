@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    my-ipwhitelist:
+      ipWhiteList:
+        sourceRange:
+          - "192.168.1.0/24"  # Example IP range to whitelist

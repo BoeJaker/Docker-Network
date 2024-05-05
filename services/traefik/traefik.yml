@@ -1,0 +1,50 @@
+api:
+  insecure: true
+
+providers:
+
+  docker:
+    endpoint: unix:///var/run/docker.sock
+    exposedByDefault: false
+    network: traefik
+
+  # vault:
+  #   address: "http://vault:8200"
+  #   token: "${VAULT_TOKEN}"
+  #   certResolver: "vault"
+  #   exposedByDefault: false  # Only expose services explicitly defined
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+log:
+  level: DEBUG
+  filePath: /var/log/traefik.log
+
+accessLog:
+  filePath: /var/log/access.log
+
+serversTransport:
+  forwardingTimeouts:
+    dialTimeout: 180s
+
+
+# certificatesResolvers:
+#   vault:
+#     address: "http://vault:8200"
+#     token: "${VAULT_TOKEN}"
+#     renewCheck: 720h
+#     rootCAs:
+#       - "/etc/traefik/vault-ca.pem"
+
+
+certificatesResolvers:
+  myresolver:
+    acme:
+      email: jb.enquires@proton.me
+      storage: /acme.json
+      tlsChallenge: true
+      caserver: https://acme-staging-v02.api.letsencrypt.org/directory

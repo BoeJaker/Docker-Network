@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Container Network Visualization</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3-graphviz/5.3.0/d3-graphviz.min.js"></script>
+</head>
+<body>
+    <div id="graph-container"></div>
+
+    <script>
+        fetch('/network_data')
+            .then(response => response.text())
+            .then(data => {
+                // Create a new graphviz instance
+                const graph = d3.select("#graph-container").graphviz();
+
+                // Specify layout options for the graph
+                const options = {
+                    engine: 'dot',  // Use the dot layout engine
+                    format: 'svg',  // Specify output format
+                    width: '100%',  // Set the width of the graph container
+                    height: '100%', // Set the height of the graph container
+                    fit: true,      // Fit the graph to the container size
+                    scale: 1,       // Scale factor for the graph
+                    zoom: false     // Disable zooming
+                    // Additional layout options can be specified here
+                };
+
+                // Render the graph with layout options
+                graph.renderDot(data, options);
+            })
+            .catch(error => console.error('Error:', error));
+    </script>
+</body>
+</html>

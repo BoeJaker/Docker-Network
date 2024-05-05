@@ -5,7 +5,7 @@ iptables -t nat -F
 iptables -t mangle -F
 iptables -X
 
-# Disable all firewall rules except for command signal (e.g., SIGUSR1)
+# Disable all networking except for command signal (e.g., SIGUSR1)
 iptables -P INPUT DROP
 iptables -P OUTPUT DROP
 iptables -P FORWARD DROP

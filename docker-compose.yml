@@ -3,26 +3,50 @@ services:
     
   full-stack:
     image: tianon/true
-    depends_on: [twingate, crowdsec, traefik]
-
+    depends_on: [twingate-a, twingate-b, crowdsec, traefik]
+  
   twingate:
-    container_name: twingate
-    image: twingate/connector:1
+    image: tianon/true
+    depends_on: [twingate-a, twingate-b]
+
+  twingate-a:
+    user: "1000" # Security measure: Run as non-root
+    container_name: twingate-a
+    image: twingate/connector:latest
     restart: unless-stopped
     environment:
       - TENANT_URL=${TENANT_URL}
-      - ACCESS_TOKEN=${ACCESS_TOKEN}
-      - REFRESH_TOKEN=${REFRESH_TOKEN}
-      - TWINGATE_LABEL_HOSTNAME=${TWINGATE_LABEL_HOSTNAME}
+      - ACCESS_TOKEN=${ACCESS_TOKEN_A}
+      - REFRESH_TOKEN=${REFRESH_TOKEN_A}
+      - TWINGATE_LABEL_HOSTNAME=${TWINGATE_LABEL_HOSTNAME}    
+    networks:
+      - external
     logging:
       driver: fluentd
       options:
           fluentd-async-connect: 'true'
           fluentd-address: '192.168.3.201:24224'
+
+  twingate-b:
+    user: "1000" # Security measure: Run as non-root
+    container_name: twingate-b
+    image: twingate/connector:latest
+    restart: unless-stopped
+    environment:
+      - TENANT_URL=${TENANT_URL}
+      - ACCESS_TOKEN=${ACCESS_TOKEN_B}
+      - REFRESH_TOKEN=${REFRESH_TOKEN_B}
+      - TWINGATE_LABEL_HOSTNAME=${TWINGATE_LABEL_HOSTNAME}
     networks:
       - external
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+
 
   ngrok:
+    user: "1000" # Security measure: Run as non-root
     container_name: ngrok
     image: ngrok/ngrok:latest
     restart: unless-stopped
@@ -39,70 +63,105 @@ services:
     environment:
       - NGROK_AUTHTOKEN=${NGROK_TOKEN}
       - HOSTNAME=fine-eternal-falcon.ngrok-free.app
+    networks:
+      - external
     volumes:
-      - ./ngrok.yml:/etc/ngrok.yml
+      - ./services/ngrok/ngrok.yml:/etc/ngrok.yml
+
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.ngrok.rule=Host(`ngrok.localhost`, `ngrok.traefik.internal`, `ngrok.int`) || PathPrefix(`/ngrok`)"
+      - "traefik.http.routers.traefik.tls=true"
+      - "traefik.http.routers.ngrok.middlewares=ngrok, ngrok-auth"
+
+      - "traefik.http.services.ngrok.loadbalancer.server.port=4040"
+      - "traefik.http.services.ngrok.loadbalancer.server.scheme=https"
+
+      - "traefik.http.middlewares.ngrok.stripprefix.prefixes=/ngrok"
+      - "traefik.http.middlewares.ngrok.stripprefix.forceSlash=false"
+      - "traefik.http.middlewares.ngrok-auth.basicauth.usersfile=/htpasswd.txt"
     logging:
       driver: fluentd
       options:
           fluentd-async-connect: 'true'
           fluentd-address: '192.168.3.201:24224'
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.ngrok.rule=Host(`ngrok.localhost`, `ngrok.traefik.internal`, `ngrok.int`) || PathPrefix(`/ngrok`)"
-      - "traefik.http.services.ngrok.loadbalancer.server.port=4040"
-      - "traefik.http.services.ngrok.loadbalancer.server.scheme=https"
-      - "traefik.http.middlewares.ngrok.stripprefix.prefixes=/ngrok"
-      - "traefik.http.middlewares.ngrok.stripprefix.forceSlash=false"
-      - "traefik.http.routers.ngrok.middlewares=ngrok"
-      - "traefik.http.routers.ngrok.middlewares=ngrok, ngrok-auth"
-      - "traefik.http.middlewares.ngrok-auth.basicauth.usersfile=/htpasswd.txt"
-      - "function.port.4040=Tunnel Monitoring"
-    networks:
-      - external
 
-  
   firewall:
+    # user: "1000" # Security measure: Run as non-root
     container_name: firewall
     restart: unless-stopped
     build: ./services/firewall
     privileged: true
+    sysctls:
+      - net.ipv4.ip_forward=1
+    networks:
+      - external
+      - firewall
+
+  # Nginx server with OWASP CRS (Core Rule Set) rules
+  waf:
+    container_name: waf
+    image: owasp/modsecurity-crs:nginx-alpine
+    environment:
+      - PARANOIA=2
+      - ANOMALY_INBOUND=10
+      - ANOMALY_OUTBOUND=5
+      - BACKEND=http://dummy
+    networks:
+      - traefik
     logging:
         driver: fluentd
         options:
             fluentd-async-connect: 'true'
             fluentd-address: '192.168.3.201:24224'
 
+  # Dummy service that always returns status HTTP 200 to WAF container
+  dummy:
+    container_name: dummy
+    image: traefik/whoami
+    networks:
+      - traefik
+
   crowdsec:
+    # user: "1000" # Security measure: Run as non-root
     container_name: crowdsec
     image: crowdsecurity/crowdsec:v1.0.8
     restart: unless-stopped
     environment:
       COLLECTIONS: "crowdsecurity/traefik"
       GID: "${GID-1000}"
-    ports:
-      - 8000:8000
+    # ports:
+    #   - 8000:8000
     volumes:
-      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml
-      - logs:/var/log/traefik
+      - ./services/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml
+      - /var/log/journal:/run/log/journal
       - crowdsec-db:/var/lib/crowdsec/data/
       - crowdsec-config:/etc/crowdsec/
+    networks:
+      - crowdsec
+      - external
+
+
     logging:
       driver: fluentd
       options:
           fluentd-async-connect: 'true'
           fluentd-address: '192.168.3.201:24224'
-    networks:
-      - crowdsec
-      - external
+
 
   #metabase, because security is cool, but dashboards are cooler
   cs-dashboard:
+    user: "1000" # Security measure: Run as non-root
     container_name: cs-dashboard
     #we're using a custom Dockerfile so that metabase pops with pre-configured dashboards
     build: ./crowdsec/dashboard
     restart: unless-stopped
-    ports:
-      - 3001:3000
+    # ports:
+    #   - 3001:3000
+    networks:
+      - crowdsec
     environment:
       MB_DB_FILE: /data/metabase.db
       MGID: "${GID-1000}"
@@ -110,175 +169,163 @@ services:
       - 'crowdsec'
     volumes:
       - crowdsec-db:/metabase-data/
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.cs-dashboard.rule=Host(`cs-dashboard.localhost`, `cs-dashboard.traefik.internal`) || PathPrefix(`/cs-dashboard`)"
+      - "traefik.http.routers.cs-dashboard.tls=true"
+      - "traefik.http.routers.cs-dashboard.middlewares=cs-dashboard, cs-dashboard-auth"
+
+      - "traefik.http.services.cs-dashboard.loadbalancer.server.port=3000"
+      - "traefik.http.services.cs-dashboard.loadbalancer.server.scheme=https"
+
+      - "traefik.http.middlewares.cs-dashboard.stripprefix.prefixes=/cs-dashboard"
+      - "traefik.http.middlewares.cs-dashboard.stripprefix.forceSlash=false"
+      - "traefik.http.middlewares.cs-dashboard-auth.basicauth.usersfile=/htpasswd.txt"
     logging:
       driver: fluentd
       options:
           fluentd-async-connect: 'true'
           fluentd-address: '192.168.3.201:24224'
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.cs-dashboard.rule=Host(`cs-dashboard.localhost`, `cs-dashboard.traefik.internal`) || PathPrefix(`/cs-dashboard`)"
-      - "traefik.http.services.cs-dashboard.loadbalancer.server.port=3000"
-      - "traefik.http.services.cs-dashboard.loadbalancer.server.scheme=https"
-      - "traefik.http.middlewares.cs-dashboard.stripprefix.prefixes=/cs-dashboard"
-      - "traefik.http.middlewares.cs-dashboard.stripprefix.forceSlash=false"
-      - "traefik.http.routers.cs-dashboard.middlewares=cs-dashboard, cs-dashboard-auth"
-      - "traefik.http.middlewares.cs-dashboard-auth.basicauth.usersfile=/htpasswd.txt"
-      - "function.port.80=Reverse Proxy "
-    networks:
-      - crowdsec
-      - logging
-        # ipv4_address: 172.20.0.5
+
 
   traefik:
+    # user: "1000" # Security measure: Run as non-root
     container_name: traefik
     hostname: traefik   
     image: traefik:latest
     restart: unless-stopped
-    deploy:
-      mode: global  # Deploy as a global service
-    command:
-      - "--api.insecure=true" # true"
-      - "--accesslog=true"
-      - "--tracing=true"
-      - "--tracing.serviceName=elasticsearch"
-      - "--accesslog.filepath=/var/log/access.log"
-      - "--serverstransport.insecureskipverify=true"
-
-      - "--providers.docker=true"
-      # - "--swarmmode=true"
-      - "--providers.docker.network=traefik"
-      - "--providers.docker.exposedbydefault=false"
-
-      # - "--entrypoints.twingate.address=10.0.7.4:80"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.websecure.http.tls.certResolver=myresolver"
-
-      - "--certificatesresolvers.myresolver.acme.email=jb.enquiries@proton.me"
-      - "--certificatesresolvers.myresolver.acme.storage=/etc/traefik/acme/acme.json"
-      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
-
-      - "--log.level=DEBUG"
-      - "--log.filePath=/var/log/traefik.log" 
-      - "--providers.file.directory=/dyn"
-      
-      - "--experimental.plugins.fail2ban.modulename=github.com/tomMoulard/fail2ban"
-      - "--experimental.plugins.fail2ban.version=v0.7.1"
-      - "--serversTransport.forwardingTimeouts.dialTimeout=180s"
-      # - "--configfile=/etc/traefik/traefik.yml"
     ports:
       - "80:80"
       - "443:443"
-      - "9191:8080"  # Traefik dashboard
+      # - "9191:8080"  # Traefik dashboard
+    networks:
+      - firewall
+      - traefik
+      - vault
     volumes:
+      - ./services/traefik/acme.json:/acme.json
+      # - ./services/traefik/selfsignedcerts:/selfsignedcerts
       - /var/run/docker.sock:/var/run/docker.sock
-      # - ./services/traefik/traefik.yml:/etc/traefik/traefik.yml
-      # - /services/traefik/dynamic.yml:/etc/traefik/dynamic.yml
-      - ./traefik/dyn:/dyn
+      - ./services/traefik/traefik.yml:/etc/traefik/traefik.yml
+      # - ./services/traefik/dynamic.yml:/etc/traefik/dynamic.yml
+      - ./services/traefik/dyn:/dyn
       - traefik-logs:/var/log/
-      - ./traefik/htpasswd:/htpasswd.txt
+      - ./services/traefik/htpasswd.txt:/htpasswd.txt
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`, `traefik.traefik.internal`)"
+      # - "traefik.http.routers.traefik.tls=true"
+      # - "traefik.http.routers.traefik.middlewares=traefik-auth, my-fail2ban"
+
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+      - "traefik.http.services.traefik.loadbalancer.server.scheme=http"
+
+      # - "traefik.http.middlewares.traefik.stripprefix.prefixes=/traefik"
+      # - "traefik.http.middlewares.traefik.stripprefix.forceSlash=false"
+      - "traefik.http.middlewares.traefik-auth.basicauth.usersfile=/htpasswd.txt"
     logging:
       driver: fluentd
       options:
           fluentd-async-connect: 'true'
           fluentd-address: '192.168.3.201:24224'
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`, `traefik.traefik.internal`) || PathPrefix(`/traefik`)"
-      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
-      - "traefik.http.services.traefik.loadbalancer.server.scheme=http"
-      - "certificatesResolvers.myresolver.acme.email=jb.enquiries@proton.me"
-      - "certificatesResolvers.myresolver.acme.storage=/etc/traefik/acme/acme.json"
-      - "certificatesResolvers.myresolver.acme.httpChallenge.entryPoint=web"
-      - "traefik.http.middlewares.traefik.stripprefix.prefixes=/traefik"
-      - "traefik.http.middlewares.traefik.stripprefix.forceSlash=false"
-      - "traefik.http.routers.traefik.middlewares=traefik, traefik-auth, my-fail2ban@file"
-      - "traefik.http.middlewares.traefik-auth.basicauth.usersfile=/htpasswd.txt"
-      - "function.port.8080=Reverse Proxy"
-    networks:
-      - traefik
-      - external
 
 
 # Reverse Proxy
   nginx:
+    user: "1000" # Security measure: Run as non-root
     container_name: nginx
-    image: nginx:latest
+    image: nginx:latest  
+    # ports:
+    #   - "8080:80"  
+    networks:
+      - traefik
+    volumes:
+      - ./services/nginx/conf/nginx.conf:/etc/nginx/nginx.conf
+      - ./services/nginx/htpasswd:/etc/nginx/.htpasswd
+      - ./services/nginx/https/cert.pem:/etc/nginx/cert.pem
+      - ./services/nginx/https/key.pem:/etc/nginx/key.pem
+      - ./services/nginx/ssl_passwords.txt:/etc/nginx/ssl_passwords.txt
+      - ./services/nginx/access/access.log:/etc/nginx/access.log
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.nginx.rule=Host(`nginx.localhost`, `nginx.traefik.internal`) || PathPrefix(`/nginx`)"
+      - "traefik.http.routers.nginx.tls=true"
+      - "traefik.http.routers.nginx.middlewares=nginx, nginx-auth"
+
+      - "traefik.http.services.nginx.loadbalancer.server.port=8080"
+      - "traefik.http.services.nginx.loadbalancer.server.scheme=https"
+
+      - "traefik.http.middlewares.nginx.stripprefix.prefixes=/nginx"
+      - "traefik.http.middlewares.nginx.stripprefix.forceSlash=false"
+      - "traefik.http.middlewares.nginx-auth.basicauth.usersfile=/htpasswd.txt"
     logging:
       driver: fluentd
       options:
           fluentd-async-connect: 'true'
           fluentd-address: '192.168.3.201:24224'
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./htpasswd:/etc/nginx/.htpasswd
-      - ./https/cert.pem:/etc/nginx/cert.pem
-      - ./https/key.pem:/etc/nginx/key.pem
-      - ./ssl_passwords.txt:/etc/nginx/ssl_passwords.txt
-      - ./access:/etc/nginx/access.log
-    # ports:
-    #   - "8080:80"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.nginx.rule=Host(`nginx.localhost`, `nginx.traefik.internal`) || PathPrefix(`/nginx`)"
-      - "traefik.http.services.nginx.loadbalancer.server.port=8080"
-      - "traefik.http.services.nginx.loadbalancer.server.scheme=https"
-      - "traefik.http.middlewares.nginx.stripprefix.prefixes=/nginx"
-      - "traefik.http.middlewares.nginx.stripprefix.forceSlash=false"
-      - "traefik.http.routers.nginx.middlewares=nginx, nginx-auth"
-      - "traefik.http.middlewares.nginx-auth.basicauth.usersfile=/htpasswd.txt"
-      - "function.port.80=Reverse Proxy "
-    networks:
-      - traefik
+
 
   # Man in the Middle Proxy
   mitm:
+    # user: "1000" # Security measure: Run as non-root
     container_name: mitm
+    tty: true
     # Allows network traffic introspection
     image: mitmproxy/mitmproxy
-    logging:
-      driver: fluentd
-      options:
-          fluentd-async-connect: 'true'
-          fluentd-address: '192.168.3.201:24224'
+    ports:
+      - 8889:8080
+      # - 8081:8081 # Web interface
+    # priveledged: true
+    # sysctl:
+    #   - net.ipv4.ip_forward=1
+    command:
+      - mitmweb
+      - --web-host
+      - 0.0.0.0
+      - --ssl-insecure
+      - --mode 
+      - transparent
     networks:
+      - external
       - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.mitm.rule=Host(`mitm.localhost`, `mitm.traefik.internal`) || PathPrefix(`/mitm`)"
+      - "traefik.http.routers.mitm.tls=true"
+      - "traefik.http.routers.mitm.middlewares=, mitm, mitm-auth"
 
-  # DNS Blackhole
-  dns-sinkhole:
-    container_name: dns-sinkhole
-    # Blocks malicious content and adverts from resolving nameservers
-    image: patterns/sinkhole
+      - "traefik.http.services.mitm.loadbalancer.server.port=8081"
+      - "traefik.http.services.mitm.loadbalancer.server.scheme=https"
+
+      - "traefik.http.middlewares.mitm.stripprefix.prefixes=/mitm"
+      - "traefik.http.middlewares.mitm.stripprefix.forceSlash=false"
+      - "traefik.http.middlewares.mitm-auth.basicauth.usersfile=/htpasswd.txt"
     logging:
       driver: fluentd
       options:
           fluentd-async-connect: 'true'
           fluentd-address: '192.168.3.201:24224'
-    networks:
-      - traefik
+    
 
   adguardhome:
+    # user: "1000" # Security measure: Run as non-root
     container_name: adguardhome
     image: adguard/adguardhome
-    container_name: adguardhome
-    restart: unless-stopped
-    logging:
-      driver: fluentd
-      options:
-          fluentd-async-connect: 'true'
-          fluentd-address: '192.168.3.201:24224'
+    # restart: unless-stopped
     volumes:
-      - /my/own/workdir:/opt/adguardhome/work
-      - /my/own/confdir:/opt/adguardhome/conf
+      - /services/adguard/workdir:/opt/adguardhome/work
+      - /services/adguacdrd/confdir:/opt/adguardhome/conf
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
-      # - "67:67/udp"
+      - "192.168.3.201:53:53/tcp"
+      - "192.168.3.201:53:53/udp"
+      - "67:67/udp"
       # - "68:68/udp"
-      - "8880:80/tcp"
-      # - "443:443/tcp"
-      # - "443:443/udp"
+      - "8885:80/tcp"
+      # - "4443:443/tcp"
+      # - "4443:443/udp"
       - "3003:3000/tcp"
       # - "853:853/tcp"
       # - "853:853/udp"
@@ -287,45 +334,73 @@ services:
       # - "6060:6060/tcp"
     networks:
       - traefik
-
-
-  homeassistant:
-    container_name: homeassistant
-    image: "ghcr.io/home-assistant/home-assistant:stable"
-    logging:
-      driver: fluentd
-      options:
-          fluentd-async-connect: 'true'
-          fluentd-address: '192.168.3.201:24224'
-    ports:
-      - 8123:8123
-    volumes:
-      - ./homassistant/config:/config
-      - /etc/localtime:/etc/localtime:ro
-    restart: unless-stopped
-    privileged: true
-    # network_mode: host   
-
-  whoami:
-    container_name: whoami
-    image: "traefik/whoami"
-    container_name: "simple-service"
-    logging:
-      driver: fluentd
-      options:
-          fluentd-async-connect: 'true'
-          fluentd-address: '192.168.3.201:24224'
+      - external
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`)"
-      - "traefik.http.routers.whoami.rule=Host('whoami.traefik.internal')"
-      - "traefik.http.routers.whoami.entrypoints=web"
-      - "traefik.http.middlewares.whoami.stripprefix.prefixes=/whoami"
-      - "traefik.http.middlewares.whoami.stripprefix.forceSlash=false"
-      - "traefik.http.routers.whoami.middlewares=whoami"
-      - "function.port.80=Internal test service (whoami)"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.adguard.rule=Host(`adguard.localhost`, `adguard.traefik.internal`) || PathPrefix(`/adguard`)"
+      - "traefik.http.routers.adguard.tls=true"
+      - "traefik.http.routers.adguard.middlewares=, adguard, adguard-auth"
+
+      - "traefik.http.services.adguard.loadbalancer.server.port=80"
+      - "traefik.http.services.adguard.loadbalancer.server.scheme=https"
+
+      - "traefik.http.middlewares.adguard.stripprefix.prefixes=/adguard"
+      - "traefik.http.middlewares.adguard.stripprefix.forceSlash=false"
+      - "traefik.http.middlewares.adguard-auth.basicauth.usersfile=/htpasswd.txt"
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
+
+  whoami:
+    user: "1000" # Security measure: Run as non-root
+    container_name: whoami
+    image: "traefik/whoami"
     networks:
       - traefik
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.localhost`, 'whoami.traefik.internal')"
+      - "traefik.http.routers.whoami.tls=true"
+      - "traefik.http.routers.whoami.middlewares=whoami"
+      # - "traefik.http.routers.whoami.entrypoints=web"
+
+      - "traefik.http.middlewares.whoami.stripprefix.prefixes=/whoami"
+      - "traefik.http.middlewares.whoami.stripprefix.forceSlash=false"
+    logging:
+      driver: fluentd
+      options:
+          fluentd-async-connect: 'true'
+          fluentd-address: '192.168.3.201:24224'
+
+  graph:
+    build:
+      context: ./services/graph
+      dockerfile: Dockerfile
+    container_name: network-graph
+    ports:
+      - 5002:5001
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.graph.rule=Host(`graph.localhost`, `graph.traefik.internal`) || PathPrefix(`/graph`)"
+      # - "traefik.http.routers.graph.tls=true"
+      - "traefik.http.routers.graph.middlewares=graph, graph-auth"
+
+      - "traefik.http.services.graph.loadbalancer.server.port=5001"
+      - "traefik.http.services.graph.loadbalancer.server.scheme=http"
+
+      - "traefik.http.middlewares.graph.stripprefix.prefixes=/graph"
+      - "traefik.http.middlewares.graph.stripprefix.forceSlash=false"
+      - "traefik.http.middlewares.graph-auth.basicauth.usersfile=/htpasswd.txt"
 
 volumes:
   crowdsec-db:
@@ -335,16 +410,20 @@ volumes:
 
 networks:
 
+    vault:
+      external: true
+
     traefik:
       name: traefik
       driver: overlay
-      # internal: true
-      driver_opts:
+      internal: true
+      driver_opts: 
         encrypted: "true"
         scope: local
         # com.docker.network.driver.mtu: 1000
     
     crowdsec:
+      name: crowdsec
       driver: overlay
       internal: true
       driver_opts:
@@ -352,30 +431,18 @@ networks:
         scope: local
           
     external: # Public facing network
+        name: external
         driver: bridge
         enable_ipv6: false
         driver_opts:
           com.docker.network.bridge.enable_ip_masquerade: "true"
-        # ipam:
-        #     driver: default
-        #     config:
-        #         - subnet: 173.16.0.0/16
-        #           gateway: 173.16.0.1
+    
+    firewall:
+      name: firewall
+      driver: overlay
+      driver_opts:
+        encrypted: "true"
+        scope: local
+      
 
-secrets:
-  twingate_secret:
-    file: ./secrets/twingate.txt
-  ngrok_secret:
-    file: ./secrets/ngrok.txt
-  crowdsec_secret:
-    file: ./secrets/crowdsec.txt
-  traefik_secret:
-    file: ./secrets/traefik.txt
-  traefik_htpasswd:
-    file: ./secrets/traefik_htpasswd.txt
-  nginx_secret:
-    file: ./secrets/nginx.txt
-  adguard_secret:
-    file: ./secrets/adguard.txt
-  homeassistant_secret:
-    file: ./secrets/homeassistant.txt 
+
